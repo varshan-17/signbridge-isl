@@ -10,6 +10,7 @@ import type { WordRecognizer } from './builtinWords';
 import { wordFrame } from './wordFeatures';
 import type { WordFrame } from './wordFeatures';
 import { SignReference } from './SignReference';
+import { handFrameQuality, PredictionStabilizer, wordCaptureIsUsable } from './recognitionStability';
 
 type Page = 'translate' | 'teach' | 'library' | 'guide';
 const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
@@ -44,18 +45,26 @@ export default function App() {
   const [notice, setNotice] = useState(loaded.error);
   const [transcript, setTranscript] = useState('');
   const [detected, setDetected] = useState<{ label: string; score: number; kind: 'letter' | 'word'; scoreType?:'match' } | null>(null);
-  const [recognitionMode, setRecognitionMode] = useState<'letters' | 'words' | 'personal'>('letters');
+  const [usePersonalSigns, setUsePersonalSigns] = useState(false);
   const [letterReady, setLetterReady] = useState(false);
   const [wordReady, setWordReady] = useState(false);
   const [modelError, setModelError] = useState('');
   const letterModel = useRef<LetterRecognizer | null>(null);
   const wordModel = useRef<WordRecognizer | null>(null);
-  const modeRef = useRef(recognitionMode); modeRef.current = recognitionMode;
+  const personalRef = useRef(usePersonalSigns); personalRef.current = usePersonalSigns;
+  const [wordVocabulary, setWordVocabulary] = useState<string[]>([]);
+  const [practiceWord, setPracticeWord] = useState('');
+  const [wordModelError, setWordModelError] = useState('');
+  const [trackingHint, setTrackingHint] = useState('Bring your signing hands into view');
+  const [addedCount, setAddedCount] = useState(0);
   const [wordCapture, setWordCapture] = useState<{start:number;end:number} | null>(null);
   const [wordBusy, setWordBusy] = useState(false);
+  const wordBusyRef = useRef(false);
+  const wordResultUntil = useRef(0);
   const [wordPhase, setWordPhase] = useState('');
   const wordCaptureRef = useRef(wordCapture); wordCaptureRef.current = wordCapture;
   const wordFrames = useRef<WordFrame[]>([]);
+  const wordFrameTimes = useRef<number[]>([]);
   const wordFrameCount = useRef(0);
   const wordHandFrameCount = useRef(0);
   const wordRequest = useRef(0);
@@ -83,6 +92,7 @@ export default function App() {
   const recordFrames = useRef<Sequence>([]);
   const sampleFrames = useRef<{ time: number; frame: number[] }[]>([]);
   const gate = useRef(new CommitGate());
+  const stabilizer = useRef(new PredictionStabilizer());
   const lastPrediction = useRef(0);
   const lastSeen = useRef(0);
   const importRef = useRef<HTMLInputElement>(null);
@@ -112,32 +122,42 @@ export default function App() {
   }
   function commit(sign: Pick<Sign, 'label' | 'kind'>) {
     setTranscript(text => appendSign(text, sign).slice(0, 5000));
+    setAddedCount(count => count+1);
     if ((sign.kind === 'word' && optionsRef.current.autoSpeak) || (sign.kind === 'letter' && optionsRef.current.speakLetters)) speak(sign.label);
   }
   function onFrame(result: HandLandmarkerResult, now: number, pose?: PoseLandmarkerResult) {
     setHands(result.landmarks.length);
+    const quality = handFrameQuality(result.landmarks,camera.videoRef.current?.videoWidth ?? 960,camera.videoRef.current?.videoHeight ?? 720);
     if(wordCaptureRef.current && now >= wordCaptureRef.current.start && now < wordCaptureRef.current.end) {
       wordFrameCount.current++;
-      if(result.landmarks.length) wordHandFrameCount.current++;
+      if(quality === 'ready') wordHandFrameCount.current++;
       const feature = wordFrame(pose?.landmarks[0] ?? [],result.landmarks);
-      if(feature) wordFrames.current.push(feature);
+      if(feature && (quality === 'ready' || quality === 'no-hands')) { wordFrames.current.push(feature); wordFrameTimes.current.push(now); }
     }
     const frame = extractFeatures(result.landmarks, result.handedness.map(h => h[0]?.categoryName ?? 'Right'));
     if (recordingRef.current && now >= recordingRef.current.start && now < recordingRef.current.end && frame) recordFrames.current.push(frame);
-    if(pageRef.current === 'translate' && modeRef.current === 'words') return;
+    // Explicit word capture owns the shared output from loading through inference.
+    // No partial letter may leak into the message while a word is being signed.
+    if(pageRef.current === 'translate' && (wordCaptureRef.current || wordBusyRef.current || now < wordResultUntil.current)) return;
     if (!frame) {
       if (now - lastSeen.current > 300) sampleFrames.current = [];
+      stabilizer.current.reset(); setTrackingHint('Bring your signing hands into view');
       gate.current.update(null, false, now); setDetected(null); setProgress(0); return;
     }
     lastSeen.current = now;
     sampleFrames.current.push({ time: now, frame });
     sampleFrames.current = sampleFrames.current.filter(f => now - f.time <= 1800);
-    if (pageRef.current !== 'translate' || optionsRef.current.paused) { gate.current.reset(); setDetected(null); setProgress(0); return; }
-    if (now - lastPrediction.current < 220) return;
+    if (pageRef.current !== 'translate' || optionsRef.current.paused) { gate.current.reset(); stabilizer.current.reset(); setDetected(null); setProgress(0); return; }
+    if(quality !== 'ready') {
+      setTrackingHint(quality === 'too-small' ? 'Move a little closer so your hand shape is clear' : 'Keep every finger inside the camera frame');
+      stabilizer.current.reset(); gate.current.update(null,true,now); setDetected(null); setProgress(0); return;
+    }
+    setTrackingHint('Hold a letter steadily, or capture a word sign');
+    if (now - lastPrediction.current < 100) return;
     lastPrediction.current = now;
-    const personal = modeRef.current === 'personal' ? recognize(sampleFrames.current.map(f => f.frame), libraryRef.current.signs) : null;
-    const builtin = modeRef.current === 'letters' ? letterModel.current?.predict(result.landmarks,camera.videoRef.current?.videoWidth ?? 960,camera.videoRef.current?.videoHeight ?? 720) : null;
-    const prediction = personal ? { ...personal.sign, score: personal.score, scoreType:'match' as const } : builtin;
+    const personal = personalRef.current ? recognize(sampleFrames.current.map(f => f.frame), libraryRef.current.signs) : null;
+    const builtin = letterModel.current?.predict(result.landmarks,camera.videoRef.current?.videoWidth ?? 960,camera.videoRef.current?.videoHeight ?? 720);
+    const prediction = stabilizer.current.update(personal ? { ...personal.sign, score: personal.score, scoreType:'match' as const } : builtin, now);
     setDetected(prediction ?? null);
     const resultGate = gate.current.update(prediction?.id ?? null, true, now);
     setProgress(resultGate.progress);
@@ -147,8 +167,9 @@ export default function App() {
   const live = camera.status === 'live';
   const loading = camera.status === 'loading';
 
-  function resetRecognition() { gate.current.reset(); sampleFrames.current = []; setDetected(null); setProgress(0); setHands(0); }
-  function cancelWordCapture() { wordRequest.current++; wordCaptureRef.current=null; setWordCapture(null); setWordBusy(false); setWordPhase(''); camera.stopWordTracking(); }
+  function resetRecognition() { gate.current.reset(); stabilizer.current.reset(); sampleFrames.current = []; lastPrediction.current=0; setDetected(null); setProgress(0); setHands(0); }
+  function setWordProcessing(value:boolean) { wordBusyRef.current=value; setWordBusy(value); }
+  function cancelWordCapture() { wordRequest.current++; wordCaptureRef.current=null; setWordCapture(null); setWordProcessing(false); setWordPhase(''); wordResultUntil.current=0; camera.stopWordTracking(); gate.current.reset(); stabilizer.current.reset(); sampleFrames.current=[]; setDetected(null); setProgress(0); }
   function stopAll() { setDemo(false); setPaused(false); cancelWordCapture(); camera.stop(); setRecording(null); resetRecognition(); }
   function startCamera() { if(demo)setTranscript(''); setDemo(false); setPaused(false); resetRecognition(); void camera.start(); }
   function navigate(next: Page) {
@@ -158,13 +179,12 @@ export default function App() {
     if (next === 'library' || next === 'guide') camera.stop();
     setPage(next);
   }
-  function startDemo() { cancelWordCapture(); camera.stop(); resetRecognition(); setTranscript(''); setPage('translate'); setRecognitionMode('letters'); setDemo(true); setDemoRun(n => n + 1); }
-
-  function changeRecognitionMode(mode: typeof recognitionMode) { cancelWordCapture(); resetRecognition(); setDemo(false); setModelError(''); setRecognitionMode(mode); setPaused(false); }
+  function startDemo() { cancelWordCapture(); camera.stop(); resetRecognition(); setTranscript(''); setPage('translate'); setDemo(true); setDemoRun(n => n + 1); }
   async function startWordCapture() {
-    if(!live || paused || wordBusy || wordCapture) return;
+    if(!live || paused || wordBusyRef.current || wordCaptureRef.current) return;
     const request = ++wordRequest.current;
-    setWordBusy(true); setWordPhase('Loading word tracker…'); setNotice(''); setDetected(null); setProgress(0);
+    setWordProcessing(true); wordResultUntil.current=0; gate.current.reset(); stabilizer.current.reset(); sampleFrames.current=[];
+    setWordPhase('Getting ready for your word…'); setNotice(''); setDetected(null); setProgress(0); setWordModelError('');
     try {
       const { loadWordRecognizer } = await import('./builtinWords');
       const model = await loadWordRecognizer();
@@ -172,11 +192,11 @@ export default function App() {
       wordModel.current = model; setWordReady(true);
       if(!await camera.startWordTracking()) throw new Error('Start the camera again before capturing a word.');
       if(request !== wordRequest.current) { camera.stopWordTracking(); return; }
-      wordFrames.current=[]; wordFrameCount.current=0; wordHandFrameCount.current=0;
+      wordFrames.current=[]; wordFrameTimes.current=[]; wordFrameCount.current=0; wordHandFrameCount.current=0;
       const start=performance.now()+1500;
-      setWordCapture({start,end:start+4000});
+      wordCaptureRef.current={start,end:start+4000}; setWordCapture(wordCaptureRef.current);
     } catch(e) { if(request === wordRequest.current) setNotice(e instanceof Error?e.message:'Word tracking could not start. Try again.'); }
-    finally { if(request === wordRequest.current) setWordBusy(false); }
+    finally { if(request === wordRequest.current) setWordProcessing(false); }
   }
 
   useEffect(() => {
@@ -185,11 +205,21 @@ export default function App() {
     return () => {active=false;};
   }, []);
   useEffect(() => {
-    if(recognitionMode !== 'words' || wordModel.current) return;
-    let active=true; setModelError('');
-    void import('./builtinWords').then(module=>module.loadWordRecognizer()).then(model=>{if(active){wordModel.current=model;setWordReady(true);}}).catch(()=>{if(active)setModelError('The word model could not load. Refresh the page and try again.');});
+    let active=true;
+    void fetch('/models/isl-words.json').then(async response=>{
+      if(!response.ok) throw new Error('Missing vocabulary');
+      const data=await response.json();
+      if(!Array.isArray(data.classes) || data.classes.some((label:unknown)=>typeof label!=='string')) throw new Error('Invalid vocabulary');
+      if(active)setWordVocabulary(Array.from(new Set<string>(data.classes)).sort());
+    }).catch(()=>{if(active)setWordModelError('The word list could not load. You can still try capturing a word.');});
+    return()=>{active=false;};
+  }, []);
+  useEffect(() => {
+    if(!live || wordModel.current) return;
+    let active=true;
+    void import('./builtinWords').then(module=>module.loadWordRecognizer()).then(model=>{if(active){wordModel.current=model;setWordReady(true);setWordModelError('');}}).catch(()=>{if(active)setWordModelError('Word detection could not load. Capture a word to retry.');});
     return () => {active=false;};
-  }, [recognitionMode]);
+  }, [live]);
 
   useEffect(() => {
     if(!wordCapture) return;
@@ -204,17 +234,17 @@ export default function App() {
       if(now<wordCapture.end) return;
       finished=true;
       const frames=wordFrames.current.slice();
-      setWordCapture(null); camera.stopWordTracking(); setWordBusy(true); setWordPhase('Recognizing your sign…');
+      setWordProcessing(true); wordCaptureRef.current=null; setWordCapture(null); camera.stopWordTracking(); setWordPhase('Checking your word sign…');
       void (async()=>{
         try {
-          if(frames.length<12 || frames.length/Math.max(1,wordFrameCount.current)<.7 || wordHandFrameCount.current/Math.max(1,wordFrameCount.current)<.5) throw new Error('Keep your face, shoulders and signing hands visible for the full capture, then try again.');
+          if(!wordCaptureIsUsable(wordFrameCount.current,wordHandFrameCount.current,wordFrameTimes.current,wordCapture.start,wordCapture.end)) throw new Error('Keep your face, shoulders and signing hands visible for the full capture, then try again.');
           const prediction=await wordModel.current!.predict(frames);
           if(request!==wordRequest.current) return;
           setDetected(prediction); setProgress(prediction?1:0);
-          if(prediction) commit(prediction);
+          if(prediction) { commit(prediction); wordResultUntil.current=performance.now()+1800; }
           else setNotice('No clear word match. Repeat one supported ISL sign with your upper body in view.');
         }catch(e){if(request===wordRequest.current)setNotice(e instanceof Error?e.message:'Word recognition failed. Please try again.');}
-        finally{if(request===wordRequest.current){setWordBusy(false);setWordPhase('');}}
+        finally{if(request===wordRequest.current){setWordProcessing(false);setWordPhase('');gate.current.reset();stabilizer.current.reset();sampleFrames.current=[];}}
       })();
     };
     tick();const timer=setInterval(tick,100);
@@ -307,6 +337,9 @@ export default function App() {
     setTranscript(t => t && !t.endsWith(' ') ? `${t} ` : t);
   }
 
+  const activity = demo ? 'demo' : wordBusy ? 'checking' : wordCapture ? 'capturing' : paused ? 'paused' : !live ? 'off' : detected ? 'matched' : hands ? 'watching' : 'ready';
+  const activityText = demo ? 'Try the simulated conversation' : wordBusy || wordCapture ? wordPhase : paused ? 'Take your time · recognition is paused' : !live ? 'Start your camera to begin' : detected ? `${detected.label} · ${progress === 1 ? 'added to your message' : 'keep holding your sign'}` : trackingHint;
+
   return <div className="app-shell">
     <aside className="sidebar">
       <a className="brand" href="#" onClick={e => { e.preventDefault(); navigate('translate'); }}><span className="brand-icon"><Hand size={25}/></span><span>sign<span className="brand-light">bridge</span><small>SIGNS INTO CONVERSATION</small></span></a>
@@ -324,6 +357,11 @@ export default function App() {
         {notice && <div className="notice" role="status"><CircleHelp size={17}/><span>{notice}</span><button onClick={() => setNotice('')} aria-label="Dismiss notification"><X size={17}/></button></div>}
 
         {(page === 'translate' || page === 'teach') && <>
+          {page === 'translate' && <div className={`learning-ribbon activity-${activity}`}>
+            <div className={`learning-step ${live || demo ? 'complete' : 'current'}`}><span>1</span><div><strong>Camera ready</strong><small>{live ? 'You’re in view' : demo ? 'Demo preview' : 'Let’s get started'}</small></div></div>
+            <ChevronRight size={16}/><div className={`learning-step ${detected ? 'complete' : live ? 'current' : ''}`}><span>2</span><div><strong>Show your sign</strong><small>Letters and words together</small></div></div>
+            <ChevronRight size={16}/><div className={`learning-step ${transcript ? 'complete' : ''}`}><span>3</span><div><strong>Build your message</strong><small>{transcript ? 'Your conversation is growing' : 'One sign at a time'}</small></div></div>
+          </div>}
           <div className="workspace-grid">
             <section className="camera-card">
               <div className="section-header"><h2><Video size={18}/> {page === 'teach' ? 'Recording studio' : 'Camera workspace'}</h2><span className={`status-badge ${live ? 'is-live' : ''}`}><span/>{demo ? 'SIMULATED DEMO' : live ? 'CAMERA LIVE' : loading ? 'CONNECTING' : 'CAMERA OFF'}</span></div>
@@ -331,7 +369,7 @@ export default function App() {
                 <video ref={camera.videoRef} autoPlay playsInline muted className={live ? '' : 'hidden-video'}/><canvas ref={camera.canvasRef} className={live ? '' : 'hidden-video'}/>
                 <div className="view-label"><span/>{demo ? 'DEMO PREVIEW' : 'LIVE PREVIEW'}</div><div className="frame-corner top-left"/><div className="frame-corner top-right"/><div className="frame-corner bottom-left"/><div className="frame-corner bottom-right"/>
                 {!live && <div className="camera-empty"><DemoHands/><div className="camera-empty-content"><span className="camera-glyph">{loading ? <LoaderCircle size={21} className="spin"/> : <Video size={21}/>}</span><h3>{demo ? 'A glimpse of what’s possible.' : loading ? 'Getting your camera ready…' : 'Your next conversation starts here.'}</h3><p>{demo ? 'Simulated letters show how text builds as you sign.' : loading ? 'Loading the local hand tracker. This can take a few seconds.' : 'Enable your camera, keep your hands in view, and start signing.'}</p>{!demo && !loading && <button className="primary-button" onClick={startCamera}><Video size={17}/> Enable camera <ArrowRight size={16}/></button>}{loading && <button className="text-on-dark" onClick={stopAll}>Cancel</button>}{demo && <button className="primary-button" onClick={startCamera}><Video size={17}/> Try with your camera</button>}</div></div>}
-                {live && <div className="camera-live-hint">{recording ? recordPhase : wordCapture ? wordPhase : page === 'teach' ? 'Keep both hands comfortably inside the frame' : paused ? 'Recognition paused' : recognitionMode === 'words' ? (wordCapture ? wordPhase : 'Show your upper body · use Recognize a word') : recognitionMode === 'personal' && !readySigns.length ? 'Teach a sign to enable personal recognition' : hands ? `${hands} hand${hands > 1 ? 's' : ''} in view · ${detected ? 'hold your sign' : 'show a trained sign'}` : 'Bring your signing hands into view'}</div>}
+                {live && <div className="camera-live-hint">{recording ? recordPhase : page === 'teach' ? 'Keep both hands comfortably inside the frame' : activityText}</div>}
                 {(recording || wordCapture) && <div className="recording-bar"><span style={{width:`${(recording ? recordProgress : progress) * 100}%`}}/></div>}
                 <div className="camera-meta"><span><ShieldCheck size={13}/> Video stays on your device</span><span>{live ? `${camera.fps} FPS` : '2-hand tracking'} <span className="meta-dot">·</span> {demo ? 'Illustration' : 'MediaPipe'}</span></div>
               </div>
@@ -339,38 +377,37 @@ export default function App() {
               {camera.error && <div className="camera-error" role="alert">{camera.error}</div>}
               <div className="camera-footnote"><Lightbulb size={16}/><span>Good light. A clear background. Both hands in frame.</span></div>
               <SignReference
-                key={page === 'teach' ? `teach-${trainingKind}` : `translate-${recognitionMode === 'words' || recognitionMode === 'personal' && detected?.kind === 'word' ? 'word' : 'letter'}`}
-                mode={page === 'teach' ? trainingKind : recognitionMode === 'words' || recognitionMode === 'personal' && detected?.kind === 'word' ? 'word' : 'letter'}
+                key={page === 'teach' ? `teach-${trainingKind}` : 'translate-both'}
+                mode={page === 'teach' ? trainingKind : 'both'}
                 initialLetter={page === 'teach' && trainingKind === 'letter' ? trainingLabel : detected?.kind === 'letter' ? detected.label : undefined}
-                wordLabel={page === 'teach' && trainingKind === 'word' ? activeLabel : detected?.kind === 'word' ? detected.label : undefined}
+                wordLabel={page === 'teach' && trainingKind === 'word' ? activeLabel : practiceWord || (detected?.kind === 'word' ? detected.label : undefined)}
               />
             </section>
 
-            {page === 'translate' ? <section className="translation-card">
+            {page === 'translate' ? <section className={`translation-card activity-${activity}`}>
               <div className="section-header"><h2><AudioLines size={18}/> Your translation</h2><span className="live-text-tag">{demo ? 'DEMO' : 'LIVE TEXT'}</span></div>
               <div className="recognition-controls">
-                <div className="segmented recognition-mode" aria-label="Recognition mode">
-                  <button className={recognitionMode==='letters'?'chosen':''} onClick={()=>changeRecognitionMode('letters')} aria-pressed={recognitionMode==='letters'}>Letters</button>
-                  <button className={recognitionMode==='words'?'chosen':''} onClick={()=>changeRecognitionMode('words')} aria-pressed={recognitionMode==='words'}>Words</button>
-                  <button className={recognitionMode==='personal'?'chosen':''} onClick={()=>changeRecognitionMode('personal')} aria-pressed={recognitionMode==='personal'}>My signs</button>
-                </div>
-                <p className="model-status">{modelError || (recognitionMode==='letters' ? letterReady?'Built-in ISL A–Z · no training needed':'Loading alphabet model…' : recognitionMode==='words' ? wordReady?'Built-in ISL words · no training needed':'Loading word model…' : `${readySigns.length} personal signs ready`)}</p>
-                {recognitionMode==='words' && <div className="word-capture-controls"><p>Keep your face, shoulders and hands in view. Perform one ISL word sign during the 4-second capture.</p><button className="primary-button" onClick={()=>void startWordCapture()} disabled={!live || !wordReady || !!wordCapture || wordBusy || paused}>{wordBusy?<LoaderCircle size={16} className="spin"/>:<ScanLine size={16}/>} {wordCapture ? wordPhase : wordBusy ? wordPhase : 'Recognize a word'}</button>{(wordCapture||wordBusy)&&<button className="cancel-record" onClick={cancelWordCapture}>Cancel</button>}{wordReady && <details className="supported-words"><summary>Supported word signs ({new Set(wordModel.current?.metadata.classes).size})</summary><div>{Array.from(new Set(wordModel.current?.metadata.classes)).sort().map(label=><span key={label}>{label}</span>)}</div></details>}</div>}
+                <div className="unified-title"><span className="unified-icon"><Sparkles size={19}/></span><div><h3>Letters + words, one conversation</h3><p>Hold a letter to add it. Capture a whole word sign below.</p></div></div>
+                <div className="model-chips"><span className={letterReady?'ready':''}><span/>{letterReady?'A–Z ready':'Loading A–Z…'}</span><span className={wordReady?'ready':''}><span/>{wordReady?'Word signs ready':live?'Preparing word signs…':'Word signs available'}</span></div>
+                {(modelError || wordModelError) && <p className="model-status" role="status">{modelError || wordModelError}</p>}
+                <div className="word-capture-controls"><button className="primary-button" onClick={()=>void startWordCapture()} disabled={!live || !!wordCapture || wordBusy || paused}>{wordBusy?<LoaderCircle size={16} className="spin"/>:<ScanLine size={16}/>} {wordCapture || wordBusy ? wordPhase : 'Capture word sign'}</button><p>Face, shoulders and hands in view · 4 seconds to sign</p>{(wordCapture||wordBusy)&&<button className="cancel-record" onClick={cancelWordCapture}>Cancel word capture</button>}
+                {wordVocabulary.length>0 && <details className="supported-words"><summary>Explore supported word signs ({wordVocabulary.length})</summary><p>Choose a word to open its video reference below the camera.</p><div>{wordVocabulary.map(label=><button key={label} className={practiceWord===label?'selected':''} aria-pressed={practiceWord===label} onClick={()=>setPracticeWord(label)}>{label}</button>)}</div></details>}</div>
+                <label className="personal-option"><input type="checkbox" checked={usePersonalSigns} disabled={!readySigns.length || !!wordCapture || wordBusy || demo} onChange={e=>{setUsePersonalSigns(e.target.checked);resetRecognition();}}/><span>Include my taught signs <small>{readySigns.length ? `${readySigns.length} ready` : 'Optional · teach signs to add your own'}</small></span></label>
               </div>
-              <div className="detected-block"><div className="mini-label">{recognitionMode === 'words' && !demo || detected?.kind === 'word' ? 'DETECTED WORD' : 'DETECTED LETTER'}<span className={detected ? 'match-active' : ''}>{detected ? `${detected.score}% ${detected.scoreType === 'match' || recognitionMode === 'personal' || demo ? 'match' : 'model score'}` : 'Waiting for a sign'}</span></div><div className={`detected-sign ${detected?.kind === 'word' ? 'word-sign' : ''}`}>{detected?.label ?? <span className="waiting-dash">—</span>}</div><div className="hold-progress"><span style={{width:`${progress * 100}%`}}/></div><p>{demo ? 'Sample output · no camera recognition' : wordCapture ? wordPhase : progress === 1 ? recognitionMode === 'words' ? 'Word added. Capture another sign to continue.' : 'Added. Lower your hands to repeat this sign.' : detected ? 'Hold your letter steadily to add it to your text.' : recognitionMode === 'words' ? 'Capture one supported word sign at a time.' : recognitionMode === 'letters' ? 'Built-in A–Z recognition. Hold a clear ISL letter sign.' : !readySigns.length ? 'Record 3 examples of a sign to get started.' : 'Recognizes signs from your personal library.'}</p></div>
+              <div className="detected-block"><div className="mini-label">{detected?.kind === 'word' ? 'DETECTED WORD' : 'YOUR SIGN'}<span className={detected ? 'match-active' : ''}>{detected ? `${detected.score}% ${detected.scoreType === 'match' || demo ? 'match' : 'model score'}` : 'Waiting for a clear sign'}</span></div><div key={`${addedCount}-${detected?.label ?? 'waiting'}`} className={`detected-sign ${detected?.kind === 'word' ? 'word-sign' : ''} ${detected ? 'sign-pop' : ''}`}>{detected?.label ?? <span className="waiting-dash">{wordBusy ? <LoaderCircle size={32} className="spin"/> : '—'}</span>}</div><div className="hold-progress" role="progressbar" aria-label={wordCapture?'Word capture progress':'Sign hold progress'} aria-valuemin={0} aria-valuemax={100} aria-valuenow={wordBusy ? undefined : Math.round(progress*100)}><span style={{width:`${progress * 100}%`}}/></div><p aria-live="polite">{demo ? 'Sample output · no camera recognition' : wordBusy || wordCapture ? wordPhase : progress === 1 && detected ? detected.kind === 'word' ? 'Word added! Hold a letter or capture another word.' : 'Added! Lower your hands to repeat the same sign.' : detected ? 'Keep your sign steady while the bar fills.' : activityText}</p></div>
               <div className="text-block"><div className="mini-label">YOUR MESSAGE <span>{transcript.trim() ? transcript.trim().split(/\s+/).length : 0} words</span></div><textarea aria-label="Your message" value={transcript} onChange={e => setTranscript(e.target.value)} placeholder="Your words will appear here…" maxLength={5000}/><div className="editing-tools"><button onClick={addSpace} title="Finish the current word"><Keyboard size={15}/> Space</button><button onClick={() => { setTranscript(t => t.slice(0,-1)); gate.current.reset(); }} disabled={!transcript} title="Remove the last character">⌫ <span>Delete</span></button><button onClick={() => { setTranscript(''); gate.current.reset(); }} disabled={!transcript}><Trash2 size={14}/> Clear</button></div></div>
               <div className="speech-tools"><button className="speak-button" disabled={!transcript.trim()} onClick={() => { if (speaking) { speechSynthesis.cancel(); setSpeaking(false); } else speak(transcript); }}><Volume2 size={18}/>{speaking ? 'Stop speaking' : 'Speak message'}<AudioLines size={18}/></button><label className="toggle-row"><span><span className="toggle-title">Speak words automatically</span><small>When a word sign is added or you press Space</small></span><input type="checkbox" checked={autoSpeak} onChange={e => setAutoSpeak(e.target.checked)}/><span className="switch"/></label></div>
               <div className="output-tools"><button disabled={!transcript.trim()} onClick={() => { void navigator.clipboard?.writeText(transcript).then(() => setNotice('Message copied.')).catch(() => setNotice('Could not copy. Select the message text or download it.')); if (!navigator.clipboard) setNotice('Clipboard is unavailable. Use Download instead.'); }}><Copy size={15}/> Copy</button><button disabled={!transcript.trim()} onClick={() => download(transcript, 'signbridge-message.txt')}><Download size={15}/> Download</button><button disabled={!transcript.trim()} onClick={() => { setSavedPhrases(p => [transcript.trim(),...p.filter(x => x !== transcript.trim())].slice(0,20)); setNotice('Message saved for this session.'); }}><Plus size={15}/> Save</button></div>
             </section> : <section className="training-card"><div className="section-header"><h2><Sparkles size={18}/> Teach a new sign</h2><span className="live-text-tag">PERSONAL</span></div><div className="training-content"><p className="training-intro">You show the sign.<br/><strong>SignBridge learns the pattern.</strong></p><div className="segmented"><button className={trainingKind === 'letter' ? 'chosen' : ''} onClick={() => setTrainingKind('letter')} disabled={!!recording}>Letter</button><button className={trainingKind === 'word' ? 'chosen' : ''} onClick={() => setTrainingKind('word')} disabled={!!recording}>Word / short phrase</button></div>{trainingKind === 'letter' ? <><label className="field-label" htmlFor="letter-select">Which letter are you signing?</label><select id="letter-select" value={trainingLabel} onChange={e => setTrainingLabel(e.target.value)} disabled={!!recording}>{alphabet.map(a => <option key={a} value={a}>{a}{library.signs.find(s=>s.label === a) ? ' · recorded' : ''}</option>)}</select></> : <><label className="field-label" htmlFor="word-label">Name your sign</label><input className="word-input" id="word-label" placeholder="e.g. HELLO or THANK YOU" value={wordLabel} onChange={e => setWordLabel(e.target.value)} disabled={!!recording} maxLength={40}/></>}<div className="record-status"><span className="sample-letter">{activeLabel || '?'}</span><div><strong>{selectedSign?.samples.length ?? 0} of 3 recordings</strong><p>{(selectedSign?.samples.length ?? 0) >= 3 ? 'Ready · add more examples for variety' : 'Three examples unlock recognition'}</p><div className="sample-dots">{Array.from({length:3},(_,i)=><span key={i} className={(selectedSign?.samples.length ?? 0) > i ? 'complete' : ''}/>)}</div></div></div><div className="record-instructions"><span className="instruction-number">1</span><p>Choose a label and form its ISL sign.</p><span className="instruction-number">2</span><p>After the countdown, hold or perform the sign for 1.8 seconds.</p><span className="instruction-number">3</span><p>Repeat with small natural variations in position and speed.</p></div><button className="primary-button record-button" disabled={!live || !!recording || (selectedSign?.samples.length ?? 0) >= MAX_SAMPLES} onClick={startRecording}>{recording ? <LoaderCircle size={17} className="spin"/> : <span className="record-dot"/>}{recording ? recordPhase : 'Record an example'}</button>{recording && <button className="cancel-record" onClick={() => setRecording(null)}>Cancel recording</button>}<p className="training-note">Landmark patterns are saved here, without camera images. This learns your examples; it does not verify that a sign is correct ISL.</p></div></section>}
           </div>
-          <div className="below-workspace"><div className="how-card"><div className="mini-label">A LITTLE GUIDANCE GOES A LONG WAY</div><div className="steps-row"><div><span className="step-number">01</span><h3>Choose a mode</h3><p>Letters or word signs.<br/>No training needed.</p></div><ChevronRight size={17}/><div><span className="step-number">02</span><h3>Show your sign</h3><p>Hold a letter or capture<br/>one word sign at a time.</p></div><ChevronRight size={17}/><div><span className="step-number">03</span><h3>Be heard</h3><p>Build your message and<br/>let SignBridge speak it.</p></div></div></div><div className="demo-card"><span className="demo-icon"><Monitor size={21}/></span><h3>Curious? Take a quick look.</h3><p>Explore how signs become a message<br/>with a simulated demo.</p><button onClick={startDemo}>Try the demo <ArrowRight size={16}/></button></div></div>
+          <div className="below-workspace"><div className="how-card"><div className="mini-label">A LITTLE GUIDANCE GOES A LONG WAY</div><div className="steps-row"><div><span className="step-number">01</span><h3>Start your camera</h3><p>Letters and words.<br/>One shared workspace.</p></div><ChevronRight size={17}/><div><span className="step-number">02</span><h3>Show your sign</h3><p>Hold a letter or capture<br/>one word sign at a time.</p></div><ChevronRight size={17}/><div><span className="step-number">03</span><h3>Be heard</h3><p>Build your message and<br/>let SignBridge speak it.</p></div></div></div><div className="demo-card"><span className="demo-icon"><Monitor size={21}/></span><h3>Curious? Take a quick look.</h3><p>Explore how signs become a message<br/>with a simulated demo.</p><button onClick={startDemo}>Try the demo <ArrowRight size={16}/></button></div></div>
           {savedPhrases.length > 0 && <section className="saved-messages"><h2><History size={18}/> Saved this session</h2><div>{savedPhrases.map((phrase,i)=><button key={i} onClick={() => setTranscript(phrase)}>{phrase}<ArrowRight size={14}/></button>)}</div></section>}
-          {page === 'translate' && <div className="library-banner"><div><span className="library-banner-icon"><Layers3 size={19}/></span><p><strong>Built-in letters and word signs are ready to use.</strong><span>Choose Letters to fingerspell, or Words to recognize a short ISL sign. My signs uses your personal recordings.</span></p></div><button onClick={() => navigate('teach')}>Customize your signs <ArrowRight size={16}/></button></div>}
+          {page === 'translate' && <div className="library-banner"><div><span className="library-banner-icon"><Layers3 size={19}/></span><p><strong>Built-in letters and word signs are ready to use.</strong><span>Hold letters to fingerspell, or capture a whole word sign here. Include my taught signs adds your personal recordings.</span></p></div><button onClick={() => navigate('teach')}>Customize your signs <ArrowRight size={16}/></button></div>}
         </>}
 
         {page === 'library' && <><div className="library-actions"><div><span className="metric-count">{library.signs.length}</span> signs learned <span className="divider">/</span><span className="metric-count">{readySigns.length}</span> ready to recognize</div><div><button className="secondary-button" onClick={() => importRef.current?.click()}><Upload size={16}/> Import library</button><button className="secondary-button" disabled={!library.signs.length} onClick={() => download(JSON.stringify(library, null, 2), 'signbridge-isl-library.json', 'application/json')}><ArrowDownToLine size={16}/> Export backup</button><button className="primary-button" onClick={() => navigate('teach')}><Plus size={16}/> Teach a sign</button></div><input ref={importRef} type="file" accept="application/json,.json" hidden onChange={e => { void importLibrary(e.target.files?.[0]); e.target.value = ''; }}/></div>{!library.signs.length ? <div className="empty-library"><span><Layers3 size={35}/></span><h2>A space for the way you sign.</h2><p>No signs recorded yet. Start with a familiar letter or a short word,<br/>then record three examples to make it recognizable.</p><button className="primary-button" onClick={() => navigate('teach')}>Teach your first sign <ArrowRight size={16}/></button></div> : <div className="sign-grid">{library.signs.map(sign => <article key={sign.id} className="sign-card"><div className="sign-card-top"><span className="sign-kind">{sign.kind}</span><button aria-label={`Delete ${sign.label}`} title="Delete sign" onClick={() => setDeleteId(sign.id)}><Trash2 size={16}/></button></div><h2>{sign.label}</h2><p>{sign.samples.length} recordings <span>·</span> {sign.samples.length >= 3 ? 'Ready to recognize' : `${3 - sign.samples.length} more needed`}</p><button className="sign-practice" onClick={() => { setTrainingKind(sign.kind); if (sign.kind === 'letter') setTrainingLabel(sign.label); else setWordLabel(sign.label); navigate('teach'); }}>Add an example <ArrowRight size={15}/></button></article>)}</div>}<div className="backup-note"><ShieldCheck size={20}/><p><strong>Yours to keep. Yours to control.</strong><span>Your library is stored in this browser. Export a backup before clearing browser data or changing devices. Imports add new labels and keep existing recordings.</span></p></div></>}
 
-        {page === 'guide' && <div className="guide-layout"><section className="guide-main"><h2>From a sign to a spoken message.</h2>{[{title:'Enable the camera and choose Letters',body:'Built-in ISL A–Z recognition needs no personal recordings. Hold a clear letter sign steadily to add it. Lower your hands briefly before repeating the same letter, and press Space to finish a word.'},{title:'Choose Words for whole-word signs',body:'Keep your face, shoulders and signing hands in view. Press Recognize a word, wait for the countdown, and perform one sign during the four-second capture. Supported word signs lists the pretrained vocabulary.'},{title:'Let your message be heard',body:'Review and correct the text when needed. Press Speak message, or enable automatic speech to hear completed words. Model scores are not a measure of real-world accuracy.'},{title:'Customize only when you need to',body:'Teach signs is optional. Record three examples of a personal letter or word, then choose My signs to use your own library. Your existing recordings and backups still work.'}].map((step,i)=><div className="guide-step" key={i}><span>{String(i+1).padStart(2,'0')}</span><div><h3>{step.title}</h3><p>{step.body}</p></div></div>)}<button className="primary-button" onClick={() => navigate('teach')}>Let’s teach your first sign <ArrowRight size={16}/></button></section><aside className="guide-aside"><Hand size={30}/><h3>Built-in ISL recognition.</h3><p>Letters uses the pretrained SignLens alphabet model. Words uses AI4Bharat’s INCLUDE word classifier. Both run locally; My signs uses your own recorded examples.</p><p>Built-in model scores and personal match scores do not measure validated accuracy. Similar poses, overlapping hands, signs outside the vocabulary and differences between signers can produce mistakes.</p><p>Use it for practice and demonstrations. Fluent, continuous ISL translation requires a validated dataset and a broader language model.</p><a href="https://islrtc.nic.in/document-category/awareness-material/" target="_blank" rel="noreferrer">Learn with official ISLRTC resources <ArrowRight size={15}/></a><div className="guide-privacy"><ShieldCheck size={18}/><span>Camera frames are processed locally. The app stores only hand landmarks. Browser speech services may use your device’s speech provider.</span></div></aside></div>}
+        {page === 'guide' && <div className="guide-layout"><section className="guide-main"><h2>From a sign to a spoken message.</h2>{[{title:'Start your camera and hold a letter',body:'Built-in ISL A–Z recognition needs no personal recordings. Hold a clear letter sign steadily to add it. Lower your hands briefly before repeating the same letter, and press Space to finish a word.'},{title:'Capture a word in the same workspace',body:'Keep your face, shoulders and signing hands in view. Press Capture word sign, wait for the countdown, and perform one sign during the four-second capture. Supported word signs lists the pretrained vocabulary.'},{title:'Let your message be heard',body:'Review and correct the text when needed. Press Speak message, or enable automatic speech to hear completed words. Model scores are not a measure of real-world accuracy.'},{title:'Customize only when you need to',body:'Teach signs is optional. Record three examples of a personal letter or word, then enable Include my taught signs in the translation view. Your existing recordings and backups still work.'}].map((step,i)=><div className="guide-step" key={i}><span>{String(i+1).padStart(2,'0')}</span><div><h3>{step.title}</h3><p>{step.body}</p></div></div>)}<button className="primary-button" onClick={() => navigate('teach')}>Let’s teach your first sign <ArrowRight size={16}/></button></section><aside className="guide-aside"><Hand size={30}/><h3>Built-in ISL recognition.</h3><p>Letters uses the pretrained SignLens alphabet model. Words uses AI4Bharat’s INCLUDE word classifier. Both run locally. Include my taught signs adds your recorded examples.</p><p>Built-in model scores and personal match scores do not measure validated accuracy. Similar poses, overlapping hands, signs outside the vocabulary and differences between signers can produce mistakes.</p><p>Use it for practice and demonstrations. Fluent, continuous ISL translation requires a validated dataset and a broader language model.</p><a href="https://islrtc.nic.in/document-category/awareness-material/" target="_blank" rel="noreferrer">Learn with official ISLRTC resources <ArrowRight size={15}/></a><div className="guide-privacy"><ShieldCheck size={18}/><span>Camera frames are processed locally. The app stores only hand landmarks. Browser speech services may use your device’s speech provider.</span></div></aside></div>}
         <footer><span><Hand size={14}/> A bridge to more connected conversations.</span><span>Made for your hands. Built around your voice.</span></footer>
       </main>
     </div>

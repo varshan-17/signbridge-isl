@@ -1,0 +1,88 @@
+.learning-ribbon {
+  display: flex; align-items: center; justify-content: space-between; gap: 14px;
+  padding: 17px 22px; margin: -8px 0 22px;
+  border: 1px solid #eddfc5; border-radius: 20px;
+  background: linear-gradient(110deg,#fff4d6,#f6f6e6 45%,#f1ecfc);
+}
+.learning-ribbon>svg { color:#bdbaa5; flex-shrink:0; }
+.learning-step { display:flex; gap:11px; align-items:center; color:#5c7768; }
+.learning-step>span {
+  display:grid; place-items:center; width:33px; height:33px; flex-shrink:0;
+  background:#fff9ef; border:1px solid #ebdfcb; border-radius:12px; font-weight:800;
+  transition:background .25s,transform .25s;
+}
+.learning-step strong { display:block; font-size:12px; font-weight:750; }
+.learning-step small { display:block; font-size:10px; color:#77857b; margin-top:3px; }
+.learning-step.current>span { background:#ffe5a0; border-color:#f1cc70; animation:step-breathe 2.5s ease-in-out infinite; }
+.learning-step.complete>span { background:#ddf2cf; border-color:#b8dbac; color:#397951; }
+.translation-card { transition:border-color .3s,box-shadow .3s; }
+.translation-card.activity-capturing,.translation-card.activity-checking {
+  border-color:#c5afd9; box-shadow:0 7px 24px #b292cb25;
+}
+.translation-card.activity-matched { border-color:#a8d69d; }
+.unified-title { display:flex; gap:12px; align-items:center; }
+.unified-icon { display:grid; place-items:center; width:38px; height:38px; flex-shrink:0; background:#fff0bf; color:#b68340; border-radius:13px; }
+.unified-title h3 { color:#40684f; font-size:14px; line-height:1.4; font-weight:800; }
+.unified-title p { font-size:11px; line-height:1.7; color:#637c6b; margin-top:4px; }
+.recognition-controls { padding:19px 20px 15px; background:#fffefa; }
+.model-chips { display:flex; flex-wrap:wrap; gap:7px; margin-top:13px; }
+.model-chips>span { display:flex; align-items:center; gap:6px; padding:5px 8px; font-size:9px; border:1px solid #eadfd0; background:#faf6ef; border-radius:99px; color:#7b7669; }
+.model-chips>span>span { width:5px; height:5px; border-radius:50%; background:#bcad90; }
+.model-chips>span.ready { background:#eef8e7; border-color:#d4e7c6; color:#416e50; }
+.model-chips>span.ready>span { background:#6ba36c; }
+.model-chips>span:last-child.ready { color:#7c5c96; background:#f4edf9; border-color:#e4d7ee; }
+.model-chips>span:last-child.ready>span { background:#a184b9; }
+.model-status { margin-top:9px; color:#a35f48; font-size:10px; }
+.word-capture-controls { margin-top:16px; }
+.word-capture-controls>.primary-button { min-height:43px; font-size:12px; background:#80699a; border-color:#80699a; }
+.word-capture-controls>.primary-button:hover:not(:disabled) { background:#6e5888; }
+.word-capture-controls>p { text-align:center; font-size:10px; margin:8px 0 0; color:#758372; }
+.personal-option { display:flex; align-items:center; gap:8px; padding-top:13px; margin-top:13px; border-top:1px dashed #e5dfd2; color:#577561; font-size:11px; }
+.personal-option input { accent-color:#579c75; width:15px; height:15px; flex-shrink:0; }
+.personal-option small { display:block; font-size:9px; color:#7c8a7b; margin-top:3px; }
+.supported-words { font-size:10px; color:#697c64; }
+.supported-words summary { padding:6px 0; }
+.supported-words>p { font-size:10px; line-height:1.7; margin:5px 0; }
+.supported-words>div { gap:6px; }
+.supported-words button { padding:6px 8px; border:1px solid #e3e6d4; border-radius:9px; background:#f8faef; color:#517257; font-size:9px; min-height:29px; }
+.supported-words button.selected { border-color:#ba9fd1; background:#f0e5f8; color:#72508c; }
+.detected-block { transition:background .3s; }
+.activity-capturing .detected-block,.activity-checking .detected-block { background:#f3ecfa; }
+.detected-sign { font-family:'DM Sans Variable',sans-serif; font-weight:750; }
+.sign-pop { animation:sign-arrive .35s ease-out both; }
+.hold-progress { height:8px; border-radius:9px; overflow:hidden; background:#e1e9d9; }
+.hold-progress>span { border-radius:9px; background:linear-gradient(90deg,#8ccb9c,#eac777); }
+.activity-capturing .hold-progress>span { background:linear-gradient(90deg,#b398cd,#8cc9d2); }
+.activity-checking .hold-progress>span { width:35%!important; background:#b398cd; animation:checking-sweep 1.5s ease-in-out infinite; }
+.reference-word-guide { margin-top:16px; }
+.reference-word-guide h4 { margin:0 0 8px; color:#816291; font-size:11px; }
+.reference-word-guide .word-reference { background:#f6effa; border-color:#e7dbea; padding:12px 14px; }
+.reference-word-guide .word-reference a { color:#715589; background:#eadcf4; }
+.camera-stage.with-camera .camera-meta,.camera-stage.with-camera .view-label { color:#ecf6ed; }
+.camera-live-hint { background:#18372bce; color:#f1f9ed; border-radius:12px; padding:8px 10px; margin:0 12px; }
+.demo-hands { animation:hands-greet 5s ease-in-out infinite; }
+.primary-button { transition:transform .18s,background .18s,box-shadow .18s; }
+.primary-button:hover:not(:disabled) { transform:translateY(-2px); }
+.primary-button:active:not(:disabled) { transform:translateY(0); }
+.editing-tools button,.output-tools button { transition:background .18s,transform .18s; }
+.editing-tools button:hover:not(:disabled),.output-tools button:hover:not(:disabled) { transform:translateY(-1px); }
+@keyframes step-breathe { 50% { transform:translateY(-2px); box-shadow:0 3px 8px #d9b56725; } }
+@keyframes sign-arrive { from { opacity:.35; transform:translateY(6px) scale(.94); } to { opacity:1; transform:translateY(0) scale(1); } }
+@keyframes checking-sweep { from { transform:translateX(-100%); } to { transform:translateX(385%); } }
+@keyframes hands-greet { 50% { transform:translateX(-50%) translateY(-5px); } }
+@media(max-width:700px) {
+  .learning-ribbon { padding:14px 10px; gap:6px; border-radius:16px; }
+  .learning-ribbon>svg { width:12px; }
+  .learning-step { flex:1; gap:6px; align-items:flex-start; }
+  .learning-step>span { width:22px; height:22px; font-size:10px; border-radius:8px; }
+  .learning-step strong { font-size:9px; line-height:1.5; }
+  .learning-step small { display:none; }
+  .unified-title h3 { font-size:13px; }
+  .word-capture-controls>.primary-button { min-height:45px; }
+  .reference-content { grid-template-columns:1fr 1fr; }
+  .supported-words button { min-height:34px; }
+}
+@media(prefers-reduced-motion:reduce) {
+  .demo-hands,.learning-step>span,.sign-pop,.hold-progress>span { animation:none!important; }
+  .primary-button:hover:not(:disabled) { transform:none; }
+}

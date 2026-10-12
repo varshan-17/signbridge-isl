@@ -1,6 +1,7 @@
 import type { Point } from './recognition';
 import {rankReferenceLetters,referenceFeatures} from './referenceLetters.ts';
 import type {LetterExample} from './referenceLetters';
+import { handFrameQuality } from './recognitionStability.ts';
 
 export const ISL_LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
 const fingerJoints = [[0,1,2],[1,2,3],[2,3,4],[0,5,6],[5,6,7],[6,7,8],[0,9,10],[9,10,11],[10,11,12],[0,13,14],[13,14,15],[14,15,16],[0,17,18],[17,18,19],[18,19,20]];
@@ -77,6 +78,7 @@ export class LetterRecognizer {
     return input as Float32Array;
   }
   predict(hands: Point[][], width: number, height: number): {label:string;score:number;kind:'letter';id:string;scoreType?:'match'} | null {
+    if (handFrameQuality(hands,width,height) !== 'ready') return null;
     const features = letterFeatures(hands,width,height);
     if(!features) return null;
     const probabilities = softmax(this.logits(features));
@@ -88,7 +90,7 @@ export class LetterRecognizer {
       const spatial=referenceFeatures(hands,width,height);
       if(!spatial) return null;
       const candidates=rankReferenceLetters(spatial,this.examples), match=candidates[0];
-      if(!match || match.distance>.24 || candidates[1].distance-match.distance<.035) return null;
+      if(!match || match.distance>.24 || (candidates[1] && candidates[1].distance-match.distance<.035)) return null;
       // A single compatible example needs independent agreement from the MLP.
       if(match.support<2 && (best.label!==match.label || best.score<.8)) return null;
       return {label:match.label,score:Math.round(Math.exp(-match.distance*4)*100),kind:'letter',id:`builtin-letter-${match.label}`,scoreType:'match'};

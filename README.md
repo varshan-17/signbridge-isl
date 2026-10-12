@@ -25,9 +25,10 @@ Deploy `dist` to an HTTPS static host at the domain root. Tracking models, recog
 
 ## Essential controls
 
-- **Letters:** recognize ISL A–Z using a pretrained SignLens landmark classifier. Hold a letter steadily for about a second to add it. Lower your hands briefly before repeating the same letter. Press **Space** to complete a fingerspelled word.
-- **Words:** recognize isolated signs from the pretrained AI4Bharat INCLUDE vocabulary (263 classes). Keep your face, shoulders and hands in view. Press **Recognize a word**, wait for the countdown, and perform one sign during the four-second capture. The supported vocabulary is listed below that button. Examples include HELLO, THANK YOU, GOOD MORNING, FAMILY, SCHOOL and HOSPITAL.
-- **My signs:** use your existing personal sign library. Teach at least three examples per label in Teach signs; import/export backups work as before.
+- **One translation workspace:** letters and whole-word signs share the same camera and editable message. There are no separate letter/word tabs.
+- **Held letters:** recognize ISL A–Z using a pretrained SignLens landmark classifier and spatial reference examples. Hold a letter steadily until the bar fills; recent predictions must agree before insertion. Lower your hands briefly before repeating the same letter. Press **Space** to complete a fingerspelled word.
+- **Capture word sign:** recognize one isolated sign from the pretrained AI4Bharat INCLUDE vocabulary (263 classes, 262 unique gloss labels). Keep your face, shoulders and hands in view, wait for the countdown, and perform one sign during the four-second capture. Letter insertion is suspended during word loading, capture and inference. The supported vocabulary is available below the button; choosing a word updates its dictionary reference without changing recognition output.
+- **Include my taught signs:** optionally include your existing personal sign library alongside built-in letter recognition. Teach at least three examples per label in Teach signs; import/export backups work as before.
 - **Speak message:** reads the editable text using a device/browser English voice. Automatic speech reads a recognized word or the latest fingerspelled word when Space is pressed.
 
 The simulated demo remains explicitly labelled and does not run sign recognition. Saved messages last for the current session; personal landmark recordings are stored in this browser.
@@ -38,15 +39,15 @@ The simulated demo remains explicitly labelled and does not run sign recognition
 
 The SignLens model contains 35 output classes (A–Z and digits 1–9). This app exposes the requested alphabet; digit predictions are rejected rather than relabelled as letters. Its 156 input features match the published browser pipeline: aspect correction, wrist centering, palm scaling, the trained rotation convention, 15 joint angles per hand, and raw wrist-x ordering of the two slots. A compact Float32 weight file runs the four-layer network locally.
 
-The app requires an 80% model score, a margin over competing classes, the expected hand count, and a stable temporal match. These thresholds reduce uncertain output; they do **not** guarantee that an unsupported sign will be rejected. Some similar or motion-dependent letters can be confused.
+The app uses nearby spatial reference examples when available; a lone nearby example requires independent agreement from the pretrained model. Only close examples count as support. The model-only path requires an 80% model score and a margin over competing classes. Cropped or very small hands are rejected instead of silently dropping one hand. Four agreeing observations across at least 320 ms must precede the existing hold-and-release insertion gate. These filters reduce transient and uncertain insertions; they do **not** guarantee rejection of unsupported signs. Some similar or motion-dependent letters can still be confused.
 
 ### Built-in words
 
-The official OpenHands INCLUDE LSTM checkpoint is converted to ONNX. Class order comes from the lexicographically sorted unique `Word` entries in the released training split, as required by the original dataset implementation. Readable labels use its normalized gloss map; semantically identical labels are combined after softmax.
+The official OpenHands INCLUDE ST-GCN checkpoint is converted to ONNX. Class order comes from the lexicographically sorted unique `Word` entries in the released training split, as required by the original dataset implementation. Readable labels use its normalized gloss map; semantically identical labels are combined after softmax.
 
-Input uses the published 27-joint MediaPipe preset: seven face/upper-body joints and ten joints per hand. Only x/y coordinates are used, with mean shoulder centering and shoulder-distance scaling across the clip. Hands are associated with anatomical pose wrists. Captures are resampled to 48 frames; ONNX inference uses a single WASM thread. The original released network's tensor convention is preserved. A parity test compares the ONNX output with the original PyTorch forward pass.
+Input uses the published 27-joint MediaPipe preset: seven face/upper-body joints and ten joints per hand. Only x/y coordinates are used, with mean shoulder centering and shoulder-distance scaling across the clip. Hands are associated with anatomical pose wrists. Each input view is resampled to the model's 120-frame input; ONNX inference uses a single WASM thread. The original released network's tensor convention is preserved. A parity test compares the ONNX output with the original PyTorch forward pass.
 
-Word results require a 70% model score and a 25 percentage-point margin over another label. Poor captures and uncertain outputs are rejected. The four-second isolated-sign workflow does not perform continuous sentence segmentation or ISL grammar translation.
+Word inference compares the full clip with its middle 80%. Both views must prefer the same word with adequate individual margins; the averaged score must meet 70% with a 25 percentage-point margin over another label. Captures need adequate body/hand coverage and no tracking gap longer than 500 ms. These checks favor fewer false insertions and may abstain more often; their effect on real signer accuracy has not been measured. The four-second isolated-sign workflow does not perform continuous sentence segmentation or ISL grammar translation.
 
 ### Personal signs
 
@@ -58,7 +59,9 @@ Camera access stops when the tab is hidden, the camera disconnects, or Stop is p
 
 ## Source map
 
-- `src/App.tsx`: focused recognition modes, captures, text and speech; existing personal-library controls.
+- `src/App.tsx`: unified letter/word workspace, captures, text and speech; personal-library controls.
+- `src/recognitionStability.ts`: temporal letter consensus, hand/capture quality checks and word-view consensus.
+- `src/unifiedWorkspace.css`: responsive activity feedback and motion with reduced-motion support.
 - `src/builtinLetters.ts`: exact alphabet feature pipeline and pretrained MLP.
 - `src/builtinWords.ts`: local ONNX word inference.
 - `src/wordFeatures.ts`: anatomical hand slots, joint selection and clip normalization.

@@ -4,6 +4,7 @@ import wasmModuleUrl from '../node_modules/onnxruntime-web/dist/ort-wasm-simd-th
 import { normalizeWordClip } from './wordFeatures';
 import type { WordFrame } from './wordFeatures';
 import { softmax } from './builtinLetters';
+import { selectWordConsensus } from './recognitionStability.ts';
 
 export type WordMetadata = {classes:string[];shape:number[]};
 export class WordRecognizer {
@@ -11,17 +12,20 @@ export class WordRecognizer {
   public metadata: WordMetadata;
   constructor(session: ort.InferenceSession, metadata:WordMetadata) {this.session=session;this.metadata=metadata;}
   async predict(frames:WordFrame[]): Promise<{label:string;score:number;kind:'word';id:string} | null> {
-    const tensor=new ort.Tensor('float32',normalizeWordClip(frames,this.metadata.shape[2]),this.metadata.shape);
-    try {
-      const outputs=await this.session.run({poses:tensor});
-      const values=outputs.logits.data as Float32Array;
-      const grouped=new Map<string,number>();
-      softmax(values).forEach((score,index)=>{const label=this.metadata.classes[index];grouped.set(label,(grouped.get(label)??0)+score);});
-      const scores=Array.from(grouped,([label,score])=>({label,score})).sort((a,b)=>b.score-a.score);
-      Object.values(outputs).forEach(output=>output.dispose());
-      if(scores[0].score<.7 || scores[0].score-scores[1].score<.25) return null;
-      return {label:scores[0].label,score:Math.round(scores[0].score*100),kind:'word',id:`builtin-word-${scores[0].label}`};
-    } finally { tensor.dispose(); }
+    // Compare the full capture with its middle 80%, reducing dependence on
+    // settling into a pose or lowering the hands at the capture boundaries.
+    const trim=Math.min(Math.floor(frames.length*.1),Math.floor((frames.length-12)/2));
+    const views=[frames,trim>0?frames.slice(trim,-trim):frames];
+    const probabilities:number[][]=[];
+    for(const view of views) {
+      const tensor=new ort.Tensor('float32',normalizeWordClip(view,this.metadata.shape[2]),this.metadata.shape);
+      try {
+        const outputs=await this.session.run({poses:tensor});
+        try { probabilities.push(softmax(outputs.logits.data as Float32Array)); }
+        finally { Object.values(outputs).forEach(output=>output.dispose()); }
+      } finally { tensor.dispose(); }
+    }
+    return selectWordConsensus(this.metadata.classes,probabilities);
   }
 }
 

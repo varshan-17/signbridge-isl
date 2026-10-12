@@ -27,7 +27,8 @@ export function rankReferenceLetters(features:number[],examples:LetterExample[])
   return Array.from(groups,([label,distances])=>{
     distances.sort((a,b)=>a-b);
     // Requiring two supporting examples avoids accepting one tracking accident.
-    const support=distances.filter(Number.isFinite).length;
-    return {label,distance:support>=2?(distances[0]+distances[1])/2:distances[0],support};
+    const compatible=distances.filter(Number.isFinite).length;
+    const support=distances.filter(distance=>distance<=.24).length;
+    return {label,distance:compatible>=2?(distances[0]+distances[1])/2:distances[0],support};
   }).sort((a,b)=>a.distance-b.distance);
 }

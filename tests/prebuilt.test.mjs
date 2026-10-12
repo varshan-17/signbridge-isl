@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {LetterRecognizer, letterFeatures, softmax} from '../src/builtinLetters.ts';
 import {wordFrame, normalizeWordClip} from '../src/wordFeatures.ts';
+import {handFrameQuality} from '../src/recognitionStability.ts';
 
 const hand = (x=.25,y=.5)=>Array.from({length:21},(_,i)=>({x:x+i*.008,y:y-(i%5)*.025,z:-i*.001}));
 test('built-in alphabet preprocessing uses spatial slots and exact 156 features',()=>{
@@ -37,6 +38,21 @@ test('digit and uncertain outputs are not promoted into confident letter predict
   weights[count-35+metadata.classes.indexOf('1')]=20;
   model=new LetterRecognizer(metadata,weights.buffer);
   assert.equal(model.predict([hand()],960,720),null);
+});
+test('reference-photo regressions do not insert the wrong letter or accept cropped hands',async()=>{
+  const metadata=JSON.parse(await readFile('public/models/isl-letters.json','utf8'));
+  const bytes=await readFile('public/models/isl-letters.bin');
+  const examples=JSON.parse(await readFile('public/models/isl-letter-examples.json','utf8')).examples;
+  const model=new LetterRecognizer(metadata,bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength),examples);
+  const fixtures=JSON.parse(await readFile('tests/fixtures/letter-photos.json','utf8'));
+  for(const fixture of fixtures) {
+    const prediction=model.predict(fixture.hands,fixture.width,fixture.height);
+    if(handFrameQuality(fixture.hands,fixture.width,fixture.height)!=='ready')assert.equal(prediction,null);
+    else if(prediction)assert.equal(prediction.label,fixture.label);
+  }
+  // These source-derived references are regression fixtures, not a held-out
+  // real-world accuracy benchmark.
+  assert.equal(model.predict(fixtures[0].hands,fixtures[0].width,fixtures[0].height)?.label,'A');
 });
 function body(){
   const result=Array.from({length:33},()=>({x:.5,y:.4,z:0,visibility:1}));
