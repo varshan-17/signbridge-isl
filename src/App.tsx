@@ -28,12 +28,12 @@ function download(data: string, name: string, type = 'text/plain') {
 
 function DemoHands() {
   return <svg className="demo-hands" viewBox="0 0 600 380" aria-hidden="true">
-    <defs><linearGradient id="handShade" x1="0" y1="0" x2="1" y2="1"><stop stopColor="#4b6960"/><stop offset="1" stopColor="#263d36"/></linearGradient></defs>
-    <circle cx="300" cy="193" r="142" fill="none" stroke="#61776d" strokeOpacity=".16"/><circle cx="300" cy="193" r="110" fill="none" stroke="#61776d" strokeOpacity=".12"/>
-    <path d="M222 310c-8-34-13-49-27-69l-32-47c-12-17-4-31 9-25l29 35-22-105c-4-21 18-24 22-5l21 80-6-114c-1-19 22-21 23-1l7 105 12-95c3-22 24-19 21 4l-10 93 18-57c7-20 27-12 21 6l-22 91c-7 38-5 60-2 104" fill="url(#handShade)" stroke="#7b9588" strokeWidth="1.5"/>
-    <path d="M365 314c4-36 12-54 31-77l35-44c12-16 3-30-10-22l-30 33 23-105c4-21-18-24-22-5l-22 80 7-114c1-19-22-21-24-1l-6 105-12-95c-3-22-24-19-21 4l10 93-18-57c-7-20-27-12-21 6l22 91c7 38 5 60 2 104" fill="url(#handShade)" stroke="#7b9588" strokeWidth="1.5"/>
-    <g fill="none" stroke="#c6f395" strokeWidth="2" strokeOpacity=".65"><path d="M244 280 220 201 181 180M244 280 228 166 191 100M244 280 245 161 226 62M244 280 265 170 272 82M244 280 282 205 300 145M354 280 376 201 423 183M354 280 370 166 402 100M354 280 353 161 376 62M354 280 333 170 330 82M354 280 316 205 302 145"/></g>
-    <g fill="#c6f395">{[[244,280],[220,201],[181,180],[228,166],[191,100],[245,161],[226,62],[265,170],[272,82],[282,205],[300,145],[354,280],[376,201],[423,183],[370,166],[402,100],[353,161],[376,62],[333,170],[330,82],[316,205]].map(([cx,cy],i)=><circle key={i} cx={cx} cy={cy} r="3.5"/>)}</g>
+    <defs><linearGradient id="handShade" x1="0" y1="0" x2="1" y2="1"><stop stopColor="#ffd5a8"/><stop offset="1" stopColor="#ffb8c4"/></linearGradient></defs>
+    <circle cx="300" cy="193" r="142" fill="none" stroke="#fff" strokeOpacity=".65"/><circle cx="300" cy="193" r="110" fill="none" stroke="#fff" strokeOpacity=".38"/>
+    <path d="M222 310c-8-34-13-49-27-69l-32-47c-12-17-4-31 9-25l29 35-22-105c-4-21 18-24 22-5l21 80-6-114c-1-19 22-21 23-1l7 105 12-95c3-22 24-19 21 4l-10 93 18-57c7-20 27-12 21 6l-22 91c-7 38-5 60-2 104" fill="url(#handShade)" stroke="#ef9a78" strokeWidth="2"/>
+    <path d="M365 314c4-36 12-54 31-77l35-44c12-16 3-30-10-22l-30 33 23-105c4-21-18-24-22-5l-22 80 7-114c1-19-22-21-24-1l-6 105-12-95c-3-22-24-19-21 4l10 93-18-57c-7-20-27-12-21 6l22 91c7 38 5 60 2 104" fill="url(#handShade)" stroke="#ef9a78" strokeWidth="2"/>
+    <g fill="none" stroke="#89c9d7" strokeWidth="2.5" strokeOpacity=".9"><path d="M244 280 220 201 181 180M244 280 228 166 191 100M244 280 245 161 226 62M244 280 265 170 272 82M244 280 282 205 300 145M354 280 376 201 423 183M354 280 370 166 402 100M354 280 353 161 376 62M354 280 333 170 330 82M354 280 316 205 302 145"/></g>
+    <g fill="#ffe082">{[[244,280],[220,201],[181,180],[228,166],[191,100],[245,161],[226,62],[265,170],[272,82],[282,205],[300,145],[354,280],[376,201],[423,183],[370,166],[402,100],[353,161],[376,62],[333,170],[330,82],[316,205]].map(([cx,cy],i)=><circle key={i} cx={cx} cy={cy} r="4.5"/>)}</g>
   </svg>;
 }
 
