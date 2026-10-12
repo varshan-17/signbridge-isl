@@ -1,0 +1,60 @@
+{
+  "classes": [
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7",
+    "8",
+    "9",
+    "A",
+    "B",
+    "C",
+    "D",
+    "E",
+    "F",
+    "G",
+    "H",
+    "I",
+    "J",
+    "K",
+    "L",
+    "M",
+    "N",
+    "O",
+    "P",
+    "Q",
+    "R",
+    "S",
+    "T",
+    "U",
+    "V",
+    "W",
+    "X",
+    "Y",
+    "Z"
+  ],
+  "shapes": [
+    [
+      156,
+      512
+    ],
+    [
+      512,
+      256
+    ],
+    [
+      256,
+      128
+    ],
+    [
+      128,
+      35
+    ]
+  ],
+  "source": "https://huggingface.co/venmugilrajan/SignLens-Landmark-Model/resolve/62c07b470c5a67dcadda6e7429a76e6a1766b749/isl_landmarks_weights.json",
+  "revision": "62c07b470c5a67dcadda6e7429a76e6a1766b749",
+  "sourceSha256": "c52661dc6cb0e3903cb9e21c664412fcd1c56fbd46d117be6dae462f41909f9c"
+}
